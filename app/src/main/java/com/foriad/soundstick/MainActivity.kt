@@ -42,6 +42,9 @@ class MainActivity : AppCompatActivity() {
         binding.btnCreate.setOnClickListener {
             startActivity(Intent(this, CreateStickerActivity::class.java))
         }
+        binding.btnCommunity.setOnClickListener {
+            startActivity(Intent(this, CommunityActivity::class.java))
+        }
         binding.btnFollowX.setOnClickListener {
             try {
                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://x.com/Bank_of_eth")))
@@ -97,10 +100,10 @@ class MainActivity : AppCompatActivity() {
                 if (file.exists()) {
                     holder.binding.imgPackIcon.setImageBitmap(BitmapFactory.decodeFile(file.absolutePath))
                 } else {
-                    holder.binding.imgPackIcon.setImageResource(R.drawable.logo_header)
+                    holder.binding.imgPackIcon.setImageResource(R.drawable.ic_launcher_logo)
                 }
             } else {
-                holder.binding.imgPackIcon.setImageResource(R.drawable.logo_header)
+                holder.binding.imgPackIcon.setImageResource(R.drawable.ic_launcher_logo)
             }
             holder.itemView.setOnClickListener { onClick(pack) }
         }
