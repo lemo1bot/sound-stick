@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:ads="http://schemas.android.com/apk/res-auto"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/black"
+    android:background="@color/background"
     android:orientation="vertical"
     android:padding="16dp">
 
@@ -11,8 +12,8 @@
         android:id="@+id/txtPackTitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:textColor="@color/yellow"
-        android:textSize="22sp"
+        android:textColor="@color/text_primary"
+        android:textSize="20sp"
         android:textStyle="bold" />
 
     <TextView
@@ -20,7 +21,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:textColor="@color/grey_text"
+        android:textColor="@color/text_secondary"
         android:textSize="13sp" />
 
     <Button
@@ -30,7 +31,10 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="14dp"
         android:text="Add to WhatsApp"
-        android:textStyle="bold" />
+        android:textColor="@color/on_primary"
+        android:textStyle="bold"
+        app:backgroundTint="@color/primary"
+        app:cornerRadius="14dp" />
 
     <Button
         android:id="@+id/btnAddWhatsAppBusiness"
@@ -39,22 +43,31 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
         android:text="Add to WhatsApp Business"
-        android:textStyle="bold" />
+        android:textColor="@color/text_primary"
+        android:textStyle="bold"
+        app:backgroundTint="@color/surface_variant"
+        app:cornerRadius="14dp"
+        app:strokeColor="@color/outline"
+        app:strokeWidth="1dp" />
 
     <Button
         android:id="@+id/btnPublishPack"
-        style="@style/Widget.Material3.Button.TextButton"
+        style="@style/Widget.Material3.Button"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:text="🌍 Publish Pack to Community" />
+        android:layout_marginTop="8dp"
+        android:text="🌍 Publish Pack to Community"
+        android:textColor="@color/on_primary"
+        android:textStyle="bold"
+        app:backgroundTint="@color/primary"
+        app:cornerRadius="14dp" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="12dp"
         android:text="Note: WhatsApp sticker packs are images only, so stickers added to WhatsApp are silent there. To send a sticker WITH its sound, tap “Share with Sound” on any sticker — it shares as a short video with the sound playing."
-        android:textColor="@color/grey_text"
+        android:textColor="@color/text_secondary"
         android:textSize="12sp" />
 
     <TextView
@@ -62,7 +75,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="6dp"
         android:text="Tap a sticker to play its sound. WhatsApp needs 3–30 stickers per pack."
-        android:textColor="@color/grey_text"
+        android:textColor="@color/text_secondary"
         android:textSize="12sp" />
 
     <androidx.recyclerview.widget.RecyclerView
