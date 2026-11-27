@@ -28,13 +28,27 @@ object WhatsAppHelper {
     fun displayName(packageName: String): String =
         if (packageName == WHATSAPP_BUSINESS_PACKAGE) "WhatsApp Business" else "WhatsApp"
 
-    fun isInstalled(context: Context, packageName: String): Boolean =
+    fun isInstalled(context: Context, packageName: String): Boolean {
+        val pm = context.packageManager
         try {
-            context.packageManager.getPackageInfo(packageName, 0)
-            true
+            pm.getPackageInfo(packageName, 0)
+            return true
         } catch (e: PackageManager.NameNotFoundException) {
+            // Fall through to the intent-resolution check below.
+        } catch (e: Exception) {
+            // Fall through to the intent-resolution check below.
+        }
+        // Second signal: does any activity in the target package answer
+        // the sticker-pack intent? resolveActivity only inspects the
+        // action + package, so a bare intent is equivalent to
+        // buildIntent(...) here (its extras are irrelevant to resolution).
+        return try {
+            val probe = Intent(ACTION_ENABLE_STICKER_PACK).setPackage(packageName)
+            pm.resolveActivity(probe, 0) != null
+        } catch (e: Exception) {
             false
         }
+    }
 
     /** Returns a user-readable problem, or null if the pack is valid. */
     fun validatePack(context: Context, pack: StickerPack): String? {
