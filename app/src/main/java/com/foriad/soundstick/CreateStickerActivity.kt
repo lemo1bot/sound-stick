@@ -33,6 +33,7 @@ import androidx.core.content.ContextCompat
 import com.foriad.soundstick.databinding.ActivityCreateBinding
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class CreateStickerActivity : AppCompatActivity() {
 
@@ -43,11 +44,16 @@ class CreateStickerActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityCreateBinding
     private val executor = Executors.newSingleThreadExecutor()
+
+    // Sound work runs on its OWN executor so a tiny job (e.g. generating a
+    // built-in effect) never queues behind slow preview frame sampling.
+    private val soundExecutor = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
 
     private var baseBitmap: Bitmap? = null
     private var videoFile: File? = null
     private var soundFile: File? = null
+    private var lastNoSoundToastMs = 0L
 
     // ---- Video (animated sticker) mode state ----
     private var videoMode = false
@@ -60,6 +66,12 @@ class CreateStickerActivity : AppCompatActivity() {
     private var previewFrames: List<Bitmap> = emptyList()
     private var previewIndex = 0
     private var previewGeneration = 0
+
+    // Preview sampling coalescing: at most ONE sampling run is ever in
+    // flight; extra requests just flag that the latest parameters still
+    // need sampling when the current run finishes.
+    private val samplingBusy = AtomicBoolean(false)
+    private val samplingPending = AtomicBoolean(false)
 
     private val previewCycle = object : Runnable {
         override fun run() {
@@ -114,7 +126,7 @@ class CreateStickerActivity : AppCompatActivity() {
         binding.btnTts.setOnClickListener { showTtsDialog() }
         binding.btnVideoSound.setOnClickListener { useVideoSound() }
         binding.btnPlaySound.setOnClickListener { playCurrentSound() }
-        binding.imgPreview.setOnClickListener { playCurrentSound() }
+        binding.imgPreview.setOnClickListener { onPreviewTapped() }
         binding.btnSave.setOnClickListener { choosePackAndSave() }
 
         binding.editCaption.addTextChangedListener(object : TextWatcher {
@@ -143,6 +155,7 @@ class CreateStickerActivity : AppCompatActivity() {
         stopRecording(cancel = true)
         tts?.shutdown()
         executor.shutdownNow()
+        soundExecutor.shutdownNow()
     }
 
     private fun toast(msg: String) =
@@ -248,6 +261,7 @@ class CreateStickerActivity : AppCompatActivity() {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 trimStartMs = progress.toLong()
                 updateTrimLabels()
+                schedulePreviewResample()
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
@@ -267,6 +281,7 @@ class CreateStickerActivity : AppCompatActivity() {
         binding.seekZoom.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 zoom = 1.0f + progress / 100f
+                schedulePreviewResample()
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
@@ -277,6 +292,7 @@ class CreateStickerActivity : AppCompatActivity() {
         binding.seekCropX.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 cropX = (progress - 100) / 100f
+                schedulePreviewResample()
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
@@ -287,6 +303,7 @@ class CreateStickerActivity : AppCompatActivity() {
         binding.seekCropY.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 cropY = (progress - 100) / 100f
+                schedulePreviewResample()
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
@@ -304,13 +321,28 @@ class CreateStickerActivity : AppCompatActivity() {
                 .format(videoDurationMs / 1000f, animLengthSec)
     }
 
+    /** Debounced resample (~200ms) so sliders feel live without flooding the sampler. */
+    private fun schedulePreviewResample() {
+        handler.removeCallbacks(previewResample)
+        handler.postDelayed(previewResample, 200)
+    }
+
     /** Samples low-res frames of the chosen segment and loops them as a preview. */
     private fun samplePreviewFrames() {
         val video = videoFile ?: return
+        // Coalesce: if a sampling run is already in flight, do NOT queue
+        // another one behind it — just remember the latest parameters
+        // still need sampling once it finishes.
+        if (!samplingBusy.compareAndSet(false, true)) {
+            samplingPending.set(true)
+            return
+        }
         val generation = ++previewGeneration
         val caption = binding.editCaption.text?.toString()?.trim().orEmpty()
         val start = trimStartMs
         val length = segmentLengthMs()
+        // ~8 frames total regardless of segment length keeps sampling cheap.
+        val fps = maxOf(2, 8000 / length).coerceAtMost(6)
         executor.execute {
             // Fast path: show ONE frame at the segment start right away so
             // the preview never sits on the placeholder while the full
@@ -323,19 +355,35 @@ class CreateStickerActivity : AppCompatActivity() {
                     }
                 }
             }
-            val frames = sampleFrames(video, start, length, fps = 6, size = 256, caption = caption)
+            val frames = sampleFrames(
+                video, start, length, fps = fps, size = 192, caption = caption,
+                frameGrabber = { r, t -> getPreviewFrameWithFallback(r, t) }
+            )
             runOnUiThread {
-                if (generation != previewGeneration || !videoMode) return@runOnUiThread
-                if (frames.isEmpty()) {
-                    toast("Could not preview that part of the video")
-                    return@runOnUiThread
+                try {
+                    if (generation == previewGeneration && videoMode) {
+                        if (frames.isEmpty()) {
+                            toast("Could not preview that part of the video")
+                        } else {
+                            previewFrames = frames
+                            previewIndex = 0
+                            binding.imgPreview.setImageBitmap(frames[0])
+                            handler.removeCallbacks(previewCycle)
+                            if (frames.size > 1) handler.postDelayed(previewCycle, 120)
+                        }
+                    }
+                } finally {
+                    finishSampling()
                 }
-                previewFrames = frames
-                previewIndex = 0
-                binding.imgPreview.setImageBitmap(frames[0])
-                handler.removeCallbacks(previewCycle)
-                if (frames.size > 1) handler.postDelayed(previewCycle, 120)
             }
+        }
+    }
+
+    /** Releases the sampling slot; re-samples once if sliders moved meanwhile. */
+    private fun finishSampling() {
+        samplingBusy.set(false)
+        if (samplingPending.compareAndSet(true, false)) {
+            samplePreviewFrames()
         }
     }
 
@@ -344,8 +392,8 @@ class CreateStickerActivity : AppCompatActivity() {
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(video.absolutePath)
-            val frame = getFrameWithFallback(retriever, timeMs * 1000L) ?: return null
-            processFrame(frame, 256, caption)
+            val frame = getPreviewFrameWithFallback(retriever, timeMs * 1000L) ?: return null
+            processFrame(frame, 192, caption)
         } catch (e: Exception) {
             null
         } finally {
@@ -382,6 +430,30 @@ class CreateStickerActivity : AppCompatActivity() {
     }
 
     /**
+     * Preview-only frame getter: cheapest seek first. Preview frames are
+     * small and disposable, so prefer the fast sync-frame option; the
+     * export path keeps using [getFrameWithFallback] (quality first).
+     */
+    private fun getPreviewFrameWithFallback(
+        retriever: MediaMetadataRetriever,
+        timeUs: Long
+    ): Bitmap? {
+        val options = intArrayOf(
+            MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+            MediaMetadataRetriever.OPTION_CLOSEST,
+            MediaMetadataRetriever.OPTION_PREVIOUS_SYNC
+        )
+        for (option in options) {
+            try {
+                retriever.getFrameAtTime(timeUs, option)?.let { return it }
+            } catch (e: Exception) {
+                // try the next option
+            }
+        }
+        return null
+    }
+
+    /**
      * Samples [fps] frames per second from the video segment, applying the
      * square crop (zoom + X/Y offset) and the caption to every frame.
      */
@@ -391,7 +463,9 @@ class CreateStickerActivity : AppCompatActivity() {
         lengthMs: Int,
         fps: Int,
         size: Int,
-        caption: String
+        caption: String,
+        frameGrabber: (MediaMetadataRetriever, Long) -> Bitmap? =
+            { r, t -> getFrameWithFallback(r, t) }
     ): List<Bitmap> {
         val retriever = MediaMetadataRetriever()
         try {
@@ -405,7 +479,7 @@ class CreateStickerActivity : AppCompatActivity() {
         try {
             for (i in 0 until count) {
                 val tMs = startMs + i * (1000 / fps)
-                val frame = getFrameWithFallback(retriever, tMs * 1000L)
+                val frame = frameGrabber(retriever, tMs * 1000L)
                 val src = frame ?: last ?: continue
                 last = src
                 out.add(processFrame(src, size, caption))
@@ -478,7 +552,7 @@ class CreateStickerActivity : AppCompatActivity() {
 
     private fun loadAudio(uri: Uri) {
         toast("Loading audio…")
-        executor.execute {
+        soundExecutor.execute {
             val ext = AudioTools.extensionFor(this@CreateStickerActivity, uri)
             val out = File(cacheDir, "picked_audio.$ext")
             val ok = AudioTools.copyUriToFile(this@CreateStickerActivity, uri, out)
@@ -492,7 +566,7 @@ class CreateStickerActivity : AppCompatActivity() {
     private fun useVideoSound() {
         val video = videoFile ?: return
         toast("Extracting the video's sound…")
-        executor.execute {
+        soundExecutor.execute {
             val out = File(cacheDir, "video_sound.m4a")
             val ok = AudioTools.extractVideoAudio(video, out)
             runOnUiThread {
@@ -575,7 +649,7 @@ class CreateStickerActivity : AppCompatActivity() {
             .setTitle("Built-in sound effects")
             .setItems(names) { _, which ->
                 val effect = EffectsSynth.EFFECTS[which]
-                executor.execute {
+                soundExecutor.execute {
                     val file = EffectsSynth.effectFile(cacheDir, effect)
                     runOnUiThread {
                         setSound(file, "effect: ${effect.name}")
@@ -637,6 +711,31 @@ class CreateStickerActivity : AppCompatActivity() {
     }
 
     // ---------------- Preview ----------------
+
+    /**
+     * Preview tap: plays the sound if one is attached. With no sound in
+     * video mode it silently keeps/restarts the preview loop (no toast);
+     * otherwise it nudges "Add a sound first", throttled to once per 4s.
+     */
+    private fun onPreviewTapped() {
+        val file = soundFile
+        if (file != null && file.exists()) {
+            playCurrentSound()
+            return
+        }
+        if (videoMode) {
+            if (previewFrames.size > 1) {
+                handler.removeCallbacks(previewCycle)
+                handler.postDelayed(previewCycle, 120)
+            }
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (now - lastNoSoundToastMs >= 4000) {
+            lastNoSoundToastMs = now
+            toast("Add a sound first")
+        }
+    }
 
     private fun playCurrentSound() {
         val file = soundFile
