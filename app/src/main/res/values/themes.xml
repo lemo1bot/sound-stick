@@ -1,17 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- SoundStick theme: BLACK background + YELLOW (#FFD500) accents. Dark only. -->
+    <!-- SoundStick theme: refined professional dark theme.
+         Deep charcoal background (#0B0B0F), layered surfaces, brand yellow
+         (#FFD500) reserved for primary actions and accents. Dark only. -->
     <style name="Theme.SoundStick" parent="Theme.Material3.Dark.NoActionBar">
-        <item name="colorPrimary">@color/yellow</item>
-        <item name="colorOnPrimary">@color/black</item>
-        <item name="colorPrimaryContainer">@color/yellow</item>
-        <item name="colorOnPrimaryContainer">@color/black</item>
-        <item name="colorSecondary">@color/yellow</item>
-        <item name="colorOnSecondary">@color/black</item>
-        <item name="colorSurface">@color/surface_dark</item>
-        <item name="colorOnSurface">@color/white</item>
-        <item name="android:windowBackground">@color/black</item>
-        <item name="android:statusBarColor">@color/black</item>
-        <item name="android:navigationBarColor">@color/black</item>
+        <item name="colorPrimary">@color/primary</item>
+        <item name="colorOnPrimary">@color/on_primary</item>
+        <item name="colorPrimaryContainer">@color/primary</item>
+        <item name="colorOnPrimaryContainer">@color/on_primary</item>
+        <item name="colorSecondary">@color/primary</item>
+        <item name="colorOnSecondary">@color/on_primary</item>
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorSurfaceVariant">@color/surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="colorOutline">@color/outline</item>
+        <item name="colorError">@color/error</item>
+        <item name="android:colorBackground">@color/background</item>
+        <item name="android:windowBackground">@color/background</item>
+        <item name="android:statusBarColor">@color/background</item>
+        <item name="android:navigationBarColor">@color/background</item>
     </style>
 </resources>
