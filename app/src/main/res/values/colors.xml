@@ -1,9 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="black">#000000</color>
-    <color name="surface_dark">#141414</color>
-    <color name="surface_card">#1E1E1E</color>
+    <!-- Professional dark palette: deep charcoal surfaces + brand yellow.
+         The legacy names below are kept (same hues, refined values) because
+         existing layouts still reference them. -->
+    <color name="background">#0B0B0F</color>
+    <color name="surface">#16161D</color>
+    <color name="surface_variant">#1F1F28</color>
+    <color name="outline">#2B2B36</color>
+    <color name="primary">#FFD500</color>
+    <color name="on_primary">#191900</color>
+    <color name="text_primary">#F4F4EF</color>
+    <color name="text_secondary">#A8A8B4</color>
+    <color name="error">#FF6B6B</color>
+
+    <!-- Legacy aliases -->
+    <color name="black">#0B0B0F</color>
+    <color name="surface_dark">#16161D</color>
+    <color name="surface_card">#16161D</color>
     <color name="yellow">#FFD500</color>
-    <color name="white">#FFFFFF</color>
-    <color name="grey_text">#BDBDBD</color>
+    <color name="white">#F4F4EF</color>
+    <color name="grey_text">#A8A8B4</color>
 </resources>
