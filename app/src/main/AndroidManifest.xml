@@ -11,6 +11,19 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- Android 11+ package visibility: without these declarations,
+         PackageManager cannot see WhatsApp / WhatsApp Business at all
+         (getPackageInfo throws, resolveActivity returns null) even when
+         they ARE installed, which made the app wrongly report
+         "WhatsApp is not installed on this phone." -->
+    <queries>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.whatsapp.w4b" />
+        <intent>
+            <action android:name="com.whatsapp.intent.action.ENABLE_STICKER_PACK" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher_logo"
