@@ -12,15 +12,26 @@ import java.nio.ByteBuffer
 object AudioTools {
 
     /**
-     * Extracts the audio track of a video file into an .m4a (AAC in MP4
+     * Extracts the audio track of a video into an .m4a (AAC in MP4
      * container) so the video's own sound can be stored with the sticker.
      * Returns true on success.
      */
-    fun extractVideoAudio(context: Context, videoUri: Uri, outFile: File): Boolean {
+    fun extractVideoAudio(context: Context, videoUri: Uri, outFile: File): Boolean =
+        extractAudio(outFile) { it.setDataSource(context, videoUri, null) }
+
+    /**
+     * Same extraction, but from a local video file (path-based data
+     * source). Path-based sources are far more reliable than content://
+     * Uris for MediaExtractor, so the app prefers this overload.
+     */
+    fun extractVideoAudio(videoFile: File, outFile: File): Boolean =
+        extractAudio(outFile) { it.setDataSource(videoFile.absolutePath) }
+
+    private fun extractAudio(outFile: File, setSource: (MediaExtractor) -> Unit): Boolean {
         val extractor = MediaExtractor()
         var muxer: MediaMuxer? = null
         return try {
-            extractor.setDataSource(context, videoUri, null)
+            setSource(extractor)
             var audioTrack = -1
             for (i in 0 until extractor.trackCount) {
                 val format = extractor.getTrackFormat(i)
@@ -88,6 +99,18 @@ object AudioTools {
             mime.contains("ogg") -> "ogg"
             mime.contains("aac") || mime.contains("mp4") || mime.contains("m4a") -> "m4a"
             else -> "m4a"
+        }
+    }
+
+    /** Best-effort file extension for a picked video's mime type. */
+    fun videoExtensionFor(context: Context, uri: Uri): String {
+        val mime = context.contentResolver.getType(uri) ?: return "mp4"
+        return when {
+            mime.contains("webm") -> "webm"
+            mime.contains("3gpp") -> "3gp"
+            mime.contains("quicktime") -> "mov"
+            mime.contains("matroska") || mime.contains("mkv") -> "mkv"
+            else -> "mp4"
         }
     }
 }
