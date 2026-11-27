@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="5dp"
+    android:background="@color/surface_card"
+    android:orientation="vertical"
+    android:padding="6dp">
+
+    <ImageView
+        android:id="@+id/imgSticker"
+        android:layout_width="match_parent"
+        android:layout_height="100dp"
+        android:contentDescription="Sticker"
+        android:scaleType="fitCenter" />
+
+    <Button
+        android:id="@+id/btnShareSound"
+        style="@style/Widget.Material3.Button.TextButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Share with Sound"
+        android:textSize="11sp" />
+</LinearLayout>
