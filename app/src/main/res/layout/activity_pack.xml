@@ -32,6 +32,23 @@
         android:text="Add to WhatsApp"
         android:textStyle="bold" />
 
+    <Button
+        android:id="@+id/btnAddWhatsAppBusiness"
+        style="@style/Widget.Material3.Button.OutlinedButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Add to WhatsApp Business"
+        android:textStyle="bold" />
+
+    <Button
+        android:id="@+id/btnPublishPack"
+        style="@style/Widget.Material3.Button.TextButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="🌍 Publish Pack to Community" />
+
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
