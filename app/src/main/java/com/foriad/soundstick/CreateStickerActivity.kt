@@ -1,6 +1,8 @@
 package com.foriad.soundstick
 
 import android.Manifest
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -18,9 +20,11 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.View
 import android.view.animation.Animation
 import android.view.animation.ScaleAnimation
 import android.widget.EditText
+import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -32,6 +36,11 @@ import java.util.concurrent.Executors
 
 class CreateStickerActivity : AppCompatActivity() {
 
+    companion object {
+        private const val REQUEST_ADD_WHATSAPP = 2001
+        private const val REQUEST_ADD_WHATSAPP_BUSINESS = 2002
+    }
+
     private lateinit var binding: ActivityCreateBinding
     private val executor = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
@@ -39,6 +48,30 @@ class CreateStickerActivity : AppCompatActivity() {
     private var baseBitmap: Bitmap? = null
     private var videoUri: Uri? = null
     private var soundFile: File? = null
+
+    // ---- Video (animated sticker) mode state ----
+    private var videoMode = false
+    private var videoDurationMs = 0L
+    private var trimStartMs = 0L
+    private var animLengthSec = 3
+    private var zoom = 1.0f
+    private var cropX = 0f // -1..1
+    private var cropY = 0f // -1..1
+    private var previewFrames: List<Bitmap> = emptyList()
+    private var previewIndex = 0
+    private var previewGeneration = 0
+
+    private val previewCycle = object : Runnable {
+        override fun run() {
+            if (!videoMode || previewFrames.size < 2) return
+            previewIndex = (previewIndex + 1) % previewFrames.size
+            binding.imgPreview.setImageBitmap(previewFrames[previewIndex])
+            val frameMs = (segmentLengthMs() / previewFrames.size).coerceIn(40, 1000)
+            handler.postDelayed(this, frameMs.toLong())
+        }
+    }
+
+    private val previewResample = Runnable { samplePreviewFrames() }
 
     private var recorder: MediaRecorder? = null
     private var recordingFile: File? = null
@@ -87,13 +120,25 @@ class CreateStickerActivity : AppCompatActivity() {
         binding.editCaption.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-            override fun afterTextChanged(s: Editable?) { refreshPreview() }
+            override fun afterTextChanged(s: Editable?) {
+                if (videoMode) {
+                    // Debounced: re-render the animated preview with the caption.
+                    handler.removeCallbacks(previewResample)
+                    handler.postDelayed(previewResample, 700)
+                } else {
+                    refreshPreview()
+                }
+            }
         })
+
+        setupVideoControls()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         stopPulse()
+        handler.removeCallbacks(previewCycle)
+        handler.removeCallbacks(previewResample)
         SoundPlayer.stop()
         stopRecording(cancel = true)
         tts?.shutdown()
@@ -119,7 +164,8 @@ class CreateStickerActivity : AppCompatActivity() {
                 baseBitmap = cropSquare(bmp)
                 videoUri = null
                 runOnUiThread {
-                    binding.btnVideoSound.visibility = android.view.View.GONE
+                    exitVideoMode()
+                    binding.btnVideoSound.visibility = View.GONE
                     refreshPreview()
                     toast("Photo added. Now add a sound!")
                 }
@@ -137,21 +183,25 @@ class CreateStickerActivity : AppCompatActivity() {
                 val durationMs = retriever.extractMetadata(
                     MediaMetadataRetriever.METADATA_KEY_DURATION
                 )?.toLongOrNull() ?: 0L
-                val frame = retriever.getFrameAtTime(
-                    durationMs * 500, // middle of the video, in microseconds
-                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC
-                )
                 retriever.release()
-                if (frame == null) {
-                    runOnUiThread { toast("Could not get a frame from that video") }
+                if (durationMs <= 0L) {
+                    runOnUiThread { toast("Could not read that video") }
                     return@execute
                 }
-                baseBitmap = cropSquare(frame)
-                videoUri = uri
                 runOnUiThread {
-                    binding.btnVideoSound.visibility = android.view.View.VISIBLE
-                    refreshPreview()
-                    toast("Video frame added. You can use the video's own sound!")
+                    videoMode = true
+                    videoUri = uri
+                    baseBitmap = null
+                    videoDurationMs = durationMs
+                    trimStartMs = 0L
+                    binding.layoutVideoControls.visibility = View.VISIBLE
+                    binding.btnVideoSound.visibility = View.VISIBLE
+                    binding.seekTrimStart.max =
+                        (durationMs - 500L).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+                    binding.seekTrimStart.progress = 0
+                    updateTrimLabels()
+                    samplePreviewFrames()
+                    toast("Video added — trim & crop it, then add a sound!")
                 }
             } catch (e: Exception) {
                 runOnUiThread { toast("Could not load that video") }
@@ -159,11 +209,207 @@ class CreateStickerActivity : AppCompatActivity() {
         }
     }
 
+    private fun exitVideoMode() {
+        videoMode = false
+        previewGeneration++
+        previewFrames = emptyList()
+        handler.removeCallbacks(previewCycle)
+        binding.layoutVideoControls.visibility = View.GONE
+    }
+
     private fun cropSquare(bmp: Bitmap): Bitmap {
         val size = minOf(bmp.width, bmp.height)
         val x = (bmp.width - size) / 2
         val y = (bmp.height - size) / 2
         return Bitmap.createBitmap(bmp, x, y, size, size)
+    }
+
+    // ---------------- Video mode: trim & crop ----------------
+
+    private fun segmentLengthMs(): Int {
+        val wanted = animLengthSec * 1000
+        val remaining = (videoDurationMs - trimStartMs).toInt()
+        return minOf(wanted, remaining).coerceAtLeast(200)
+    }
+
+    private fun setupVideoControls() {
+        binding.seekTrimStart.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                trimStartMs = progress.toLong()
+                updateTrimLabels()
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                samplePreviewFrames()
+            }
+        })
+        binding.rgLength.setOnCheckedChangeListener { _, checkedId ->
+            animLengthSec = when (checkedId) {
+                binding.rbLen1.id -> 1
+                binding.rbLen2.id -> 2
+                else -> 3
+            }
+            updateTrimLabels()
+            samplePreviewFrames()
+        }
+        binding.seekZoom.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                zoom = 1.0f + progress / 100f
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                samplePreviewFrames()
+            }
+        })
+        binding.seekCropX.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                cropX = (progress - 100) / 100f
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                samplePreviewFrames()
+            }
+        })
+        binding.seekCropY.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                cropY = (progress - 100) / 100f
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                samplePreviewFrames()
+            }
+        })
+    }
+
+    private fun updateTrimLabels() {
+        binding.txtTrimStart.text =
+            "Start: %.1fs".format(trimStartMs / 1000f)
+        binding.txtTrimInfo.text =
+            "Video is %.1fs — your animated sticker uses %ds from the start point."
+                .format(videoDurationMs / 1000f, animLengthSec)
+    }
+
+    /** Samples low-res frames of the chosen segment and loops them as a preview. */
+    private fun samplePreviewFrames() {
+        val uri = videoUri ?: return
+        val generation = ++previewGeneration
+        val caption = binding.editCaption.text?.toString()?.trim().orEmpty()
+        val start = trimStartMs
+        val length = segmentLengthMs()
+        executor.execute {
+            val frames = sampleFrames(uri, start, length, fps = 6, size = 256, caption = caption)
+            runOnUiThread {
+                if (generation != previewGeneration || !videoMode) return@runOnUiThread
+                if (frames.isEmpty()) {
+                    toast("Could not preview that part of the video")
+                    return@runOnUiThread
+                }
+                previewFrames = frames
+                previewIndex = 0
+                binding.imgPreview.setImageBitmap(frames[0])
+                handler.removeCallbacks(previewCycle)
+                if (frames.size > 1) handler.postDelayed(previewCycle, 120)
+            }
+        }
+    }
+
+    /**
+     * Samples [fps] frames per second from the video segment, applying the
+     * square crop (zoom + X/Y offset) and the caption to every frame.
+     */
+    private fun sampleFrames(
+        uri: Uri,
+        startMs: Long,
+        lengthMs: Int,
+        fps: Int,
+        size: Int,
+        caption: String
+    ): List<Bitmap> {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(this, uri)
+        } catch (e: Exception) {
+            return emptyList()
+        }
+        val count = maxOf(1, lengthMs * fps / 1000)
+        val out = ArrayList<Bitmap>(count)
+        var last: Bitmap? = null
+        try {
+            for (i in 0 until count) {
+                val tMs = startMs + i * (1000 / fps)
+                val frame = try {
+                    retriever.getFrameAtTime(
+                        tMs * 1000L,
+                        MediaMetadataRetriever.OPTION_CLOSEST
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+                val src = frame ?: last ?: continue
+                last = src
+                out.add(processFrame(src, size, caption))
+            }
+        } finally {
+            try {
+                retriever.release()
+            } catch (e: Exception) {
+                // ignore
+            }
+        }
+        return out
+    }
+
+    /** Applies the square crop (zoom + offsets), scales to [size], draws the caption. */
+    private fun processFrame(src: Bitmap, size: Int, caption: String): Bitmap {
+        val baseSide = minOf(src.width, src.height)
+        val side = (baseSide / zoom).toInt().coerceAtLeast(16)
+        val maxLeft = src.width - side
+        val maxTop = src.height - side
+        val centerLeft = maxLeft / 2f
+        val centerTop = maxTop / 2f
+        val left = (centerLeft + cropX * centerLeft).toInt().coerceIn(0, maxLeft)
+        val top = (centerTop + cropY * centerTop).toInt().coerceIn(0, maxTop)
+        val cropped = Bitmap.createBitmap(src, left, top, side, side)
+        val scaled = Bitmap.createScaledBitmap(cropped, size, size, true)
+        return applyCaption(scaled, caption)
+    }
+
+    /** Draws the caption (yellow, black outline, bottom) onto a copy of [src]. */
+    private fun applyCaption(src: Bitmap, caption: String): Bitmap {
+        if (caption.isEmpty()) return src
+        val size = src.width
+        val out = src.copy(Bitmap.Config.ARGB_8888, true) ?: return src
+        val canvas = Canvas(out)
+        val scale = size / 512f
+        var textSize = 46f * scale
+        val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.DEFAULT_BOLD
+            style = Paint.Style.STROKE
+            color = Color.BLACK
+            strokeWidth = 9f * scale
+            textAlign = Paint.Align.CENTER
+        }
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.DEFAULT_BOLD
+            style = Paint.Style.FILL
+            color = Color.parseColor("#FFD500")
+            textAlign = Paint.Align.CENTER
+        }
+        while (textSize > 16f * scale) {
+            stroke.textSize = textSize
+            if (stroke.measureText(caption) <= size - 20f * scale) break
+            textSize -= 3f * scale
+        }
+        fill.textSize = textSize
+        stroke.textSize = textSize
+        val y = size - 26f * scale
+        canvas.drawText(caption, size / 2f, y, stroke)
+        canvas.drawText(caption, size / 2f, y, fill)
+        return out
     }
 
     // ---------------- Sound sources ----------------
@@ -371,64 +617,44 @@ class CreateStickerActivity : AppCompatActivity() {
         binding.imgPreview.setImageBitmap(bmp)
     }
 
-    /** Final 512x512 sticker bitmap: square image + caption at the bottom. */
+    /** Final 512x512 static sticker bitmap: square photo + caption. */
     private fun renderFinalBitmap(): Bitmap? {
         val base = baseBitmap ?: return null
         val out = Bitmap.createScaledBitmap(base, 512, 512, true)
-            .copy(Bitmap.Config.ARGB_8888, true)
         val caption = binding.editCaption.text?.toString()?.trim().orEmpty()
-        if (caption.isNotEmpty()) {
-            val canvas = Canvas(out)
-            var textSize = 46f
-            val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                typeface = Typeface.DEFAULT_BOLD
-                style = Paint.Style.STROKE
-                color = Color.BLACK
-                strokeWidth = 9f
-                textAlign = Paint.Align.CENTER
-            }
-            val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                typeface = Typeface.DEFAULT_BOLD
-                style = Paint.Style.FILL
-                color = Color.parseColor("#FFD500")
-                textAlign = Paint.Align.CENTER
-            }
-            while (textSize > 16f) {
-                stroke.textSize = textSize
-                if (stroke.measureText(caption) <= 492f) break
-                textSize -= 3f
-            }
-            fill.textSize = textSize
-            stroke.textSize = textSize
-            val y = 512f - 26f
-            canvas.drawText(caption, 256f, y, stroke)
-            canvas.drawText(caption, 256f, y, fill)
-        }
-        return out
+        return applyCaption(out, caption)
     }
 
     // ---------------- Save ----------------
 
     private fun choosePackAndSave() {
-        if (baseBitmap == null) {
+        val animated = videoMode
+        if (animated && videoUri == null) {
+            toast("Pick a video first")
+            return
+        }
+        if (!animated && baseBitmap == null) {
             toast("Pick a photo or a video first")
             return
         }
-        val packs = PackStore.loadPacks(this)
+        // WhatsApp packs are all-static or all-animated: only offer packs
+        // whose type matches this sticker (plus "New pack").
+        val packs = PackStore.loadPacks(this).filter { it.accepts(animated) }
+        val typeLabel = if (animated) "animated" else "static"
         val labels = packs.map { "${it.name} (${it.stickers.size})" } + "＋ New pack…"
         AlertDialog.Builder(this)
-            .setTitle("Save sticker to pack")
+            .setTitle("Save $typeLabel sticker to pack")
             .setItems(labels.toTypedArray()) { _, which ->
                 if (which == packs.size) {
-                    showNewPackDialog()
+                    showNewPackDialog(animated)
                 } else {
-                    saveToPack(packs[which])
+                    saveToPack(packs[which], animated)
                 }
             }
             .show()
     }
 
-    private fun showNewPackDialog() {
+    private fun showNewPackDialog(animated: Boolean) {
         val input = EditText(this).apply { hint = "Pack name" }
         AlertDialog.Builder(this)
             .setTitle("New pack")
@@ -438,28 +664,143 @@ class CreateStickerActivity : AppCompatActivity() {
                 if (name.isEmpty()) {
                     toast("Give the pack a name")
                 } else {
-                    saveToPack(PackStore.createPack(this, name))
+                    saveToPack(PackStore.createPack(this, name), animated)
                 }
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun saveToPack(pack: StickerPack) {
-        val bitmap = renderFinalBitmap() ?: return
+    private fun saveToPack(pack: StickerPack, animated: Boolean) {
         val audio = soundFile
-        toast("Saving sticker…")
-        executor.execute {
-            PackStore.addSticker(this@CreateStickerActivity, pack, bitmap, audio)
-            runOnUiThread {
-                Toast.makeText(
-                    this@CreateStickerActivity,
-                    "Sticker saved to “${pack.name}”",
-                    Toast.LENGTH_SHORT
-                ).show()
-                // Calm interstitial timing applies (see InterstitialHelper).
-                InterstitialHelper.maybeShow(this@CreateStickerActivity) { finish() }
+        if (!animated) {
+            val bitmap = renderFinalBitmap() ?: return
+            toast("Saving sticker…")
+            executor.execute {
+                PackStore.addSticker(this@CreateStickerActivity, pack, bitmap, audio)
+                runOnUiThread { showSavedDialog(pack) }
             }
+            return
+        }
+        val uri = videoUri ?: return
+        val caption = binding.editCaption.text?.toString()?.trim().orEmpty()
+        val start = trimStartMs
+        val fullLength = segmentLengthMs()
+        toast("Making your animated sticker…")
+        executor.execute {
+            val encoded = encodeAnimatedSticker(uri, start, fullLength, caption)
+            if (encoded == null) {
+                runOnUiThread { toast("Could not make an animated sticker from that video") }
+                return@execute
+            }
+            val (bytes, firstFrame) = encoded
+            PackStore.addAnimatedSticker(
+                this@CreateStickerActivity, pack, bytes, audio, firstFrame
+            )
+            runOnUiThread { showSavedDialog(pack) }
+        }
+    }
+
+    /**
+     * Encodes the trimmed/cropped segment as an animated WebP <= 500 KB.
+     * Tries progressively lower quality, then fewer frames per second,
+     * then a shorter segment, until it fits WhatsApp's limit.
+     */
+    private fun encodeAnimatedSticker(
+        uri: Uri,
+        startMs: Long,
+        fullLengthMs: Int,
+        caption: String
+    ): Pair<ByteArray, Bitmap?>? {
+        data class Attempt(val fps: Int, val quality: Int, val lengthScale: Double)
+
+        val attempts = listOf(
+            Attempt(10, 75, 1.0),
+            Attempt(10, 55, 1.0),
+            Attempt(8, 50, 1.0),
+            Attempt(6, 45, 1.0),
+            Attempt(5, 40, 1.0),
+            Attempt(5, 40, 0.7),
+            Attempt(5, 35, 0.5)
+        )
+        for (attempt in attempts) {
+            val lengthMs = (fullLengthMs * attempt.lengthScale).toInt().coerceAtLeast(200)
+            val frames = sampleFrames(uri, startMs, lengthMs, attempt.fps, 512, caption)
+            if (frames.isEmpty()) continue
+            val bytes = AnimatedWebPWriter.encode(frames, 1000 / attempt.fps, attempt.quality)
+                ?: continue
+            if (bytes.size <= PackStore.ANIMATED_MAX_BYTES) {
+                return bytes to frames.firstOrNull()
+            }
+        }
+        return null
+    }
+
+    // ---------------- After save: add the pack to WhatsApp ----------------
+
+    private fun showSavedDialog(pack: StickerPack) {
+        val fresh = PackStore.getPack(this, pack.id) ?: pack
+        val message = if (fresh.stickers.size < 3) {
+            "Saved to “${fresh.name}” (${fresh.stickers.size} sticker(s)). " +
+                "WhatsApp needs at least 3 stickers in a pack before a pack can be added, " +
+                "so add ${3 - fresh.stickers.size} more to this pack first."
+        } else {
+            "Saved to “${fresh.name}”. You can add the whole pack to WhatsApp right now."
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Sticker saved! 🎉")
+            .setMessage(message)
+            .setPositiveButton("Add pack to WhatsApp") { _, _ ->
+                addPackToWhatsApp(fresh, WhatsAppHelper.WHATSAPP_PACKAGE, REQUEST_ADD_WHATSAPP)
+            }
+            .setNeutralButton("Add pack to WhatsApp Business") { _, _ ->
+                addPackToWhatsApp(
+                    fresh,
+                    WhatsAppHelper.WHATSAPP_BUSINESS_PACKAGE,
+                    REQUEST_ADD_WHATSAPP_BUSINESS
+                )
+            }
+            .setNegativeButton("Done") { _, _ ->
+                // Calm interstitial timing applies (see InterstitialHelper).
+                InterstitialHelper.maybeShow(this) { finish() }
+            }
+            .show()
+    }
+
+    private fun addPackToWhatsApp(pack: StickerPack, packageName: String, requestCode: Int) {
+        val appName = WhatsAppHelper.displayName(packageName)
+        if (!WhatsAppHelper.isInstalled(this, packageName)) {
+            Toast.makeText(
+                this, "$appName is not installed on this phone.", Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        val problem = WhatsAppHelper.validatePack(this, pack)
+        if (problem != null) {
+            Toast.makeText(this, problem, Toast.LENGTH_LONG).show()
+            return
+        }
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(WhatsAppHelper.buildIntent(pack, packageName), requestCode)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(
+                this, "$appName is not installed on this phone.", Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        val packageName = when (requestCode) {
+            REQUEST_ADD_WHATSAPP -> WhatsAppHelper.WHATSAPP_PACKAGE
+            REQUEST_ADD_WHATSAPP_BUSINESS -> WhatsAppHelper.WHATSAPP_BUSINESS_PACKAGE
+            else -> return
+        }
+        val message = WhatsAppHelper.resultMessage(resultCode, data, packageName)
+        if (message != null) {
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         }
     }
 }
