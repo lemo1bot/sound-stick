@@ -28,7 +28,7 @@
             android:background="@color/surface_card"
             android:contentDescription="Sticker preview"
             android:scaleType="fitCenter"
-            android:src="@drawable/logo_header" />
+            android:src="@drawable/ic_launcher_logo" />
 
         <TextView
             android:layout_width="match_parent"
@@ -61,6 +61,132 @@
                 android:layout_marginStart="10dp"
                 android:layout_weight="1"
                 android:text="Pick Video" />
+        </LinearLayout>
+
+        <!-- Video mode: trim + crop controls (visible only for videos) -->
+        <LinearLayout
+            android:id="@+id/layoutVideoControls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@color/surface_card"
+            android:orientation="vertical"
+            android:padding="12dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🎬 Animated video sticker — trim &amp; crop"
+                android:textColor="@color/yellow"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/txtTrimInfo"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="@color/grey_text"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/txtTrimStart"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Start: 0.0s"
+                android:textColor="@color/white"
+                android:textSize="13sp" />
+
+            <SeekBar
+                android:id="@+id/seekTrimStart"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="1000"
+                android:progress="0" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Sticker length"
+                android:textColor="@color/white"
+                android:textSize="13sp" />
+
+            <RadioGroup
+                android:id="@+id/rgLength"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <RadioButton
+                    android:id="@+id/rbLen1"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="1s"
+                    android:textColor="@color/white" />
+
+                <RadioButton
+                    android:id="@+id/rbLen2"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="2s"
+                    android:textColor="@color/white" />
+
+                <RadioButton
+                    android:id="@+id/rbLen3"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:checked="true"
+                    android:text="3s"
+                    android:textColor="@color/white" />
+            </RadioGroup>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Zoom (crop closer)"
+                android:textColor="@color/white"
+                android:textSize="13sp" />
+
+            <SeekBar
+                android:id="@+id/seekZoom"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="200"
+                android:progress="0" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Move crop left / right"
+                android:textColor="@color/white"
+                android:textSize="13sp" />
+
+            <SeekBar
+                android:id="@+id/seekCropX"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="200"
+                android:progress="100" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Move crop up / down"
+                android:textColor="@color/white"
+                android:textSize="13sp" />
+
+            <SeekBar
+                android:id="@+id/seekCropY"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="200"
+                android:progress="100" />
         </LinearLayout>
 
         <com.google.android.material.textfield.TextInputLayout
