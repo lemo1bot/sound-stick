@@ -2,12 +2,16 @@ package com.foriad.soundstick
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
-import android.view.animation.AnimationUtils
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.GridLayoutManager
@@ -28,6 +32,7 @@ class PackActivity : AppCompatActivity() {
     private lateinit var binding: ActivityPackBinding
     private lateinit var pack: StickerPack
     private val executor = Executors.newSingleThreadExecutor()
+    private var lastTargetPackage: String = WhatsAppHelper.WHATSAPP_PACKAGE
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,20 +48,31 @@ class PackActivity : AppCompatActivity() {
         }
         pack = loaded
 
+        // Repair packs saved before the WhatsApp size rules were enforced
+        // (oversized stickers / tray), so they can be added to WhatsApp.
+        executor.execute { PackStore.healPack(this, loaded) }
+
         binding.txtPackTitle.text = pack.name
         binding.txtPackInfo.text =
-            "${pack.stickers.size} stickers · by ${pack.publisher}"
+            "${pack.stickers.size} stickers · by ${pack.publisher}" +
+                (if (pack.isAnimated) " · animated" else "")
 
         binding.recyclerStickers.layoutManager = GridLayoutManager(this, 3)
         binding.recyclerStickers.adapter = StickerAdapter()
 
-        binding.btnAddWhatsApp.setOnClickListener { addToWhatsApp() }
+        binding.btnAddWhatsApp.setOnClickListener {
+            addToWhatsApp(WhatsAppHelper.WHATSAPP_PACKAGE)
+        }
+        binding.btnAddWhatsAppBusiness.setOnClickListener {
+            addToWhatsApp(WhatsAppHelper.WHATSAPP_BUSINESS_PACKAGE)
+        }
+        binding.btnPublishPack.setOnClickListener { confirmPublishPack() }
 
         try {
             binding.adView.adUnitId = AdsConfig.BANNER_ID
             binding.adView.loadAd(AdRequest.Builder().build())
         } catch (e: Exception) {
-            binding.adView.visibility = android.view.View.GONE
+            binding.adView.visibility = View.GONE
         }
     }
 
@@ -66,37 +82,32 @@ class PackActivity : AppCompatActivity() {
         executor.shutdownNow()
     }
 
-    /** Official WhatsApp sticker-pack hand-off intent. */
-    private fun addToWhatsApp() {
-        if (pack.stickers.size < 3) {
-            Toast.makeText(
-                this,
-                "WhatsApp needs at least 3 stickers in a pack. This pack has ${pack.stickers.size}.",
-                Toast.LENGTH_LONG
-            ).show()
+    private fun toastLong(msg: String) =
+        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+
+    /** Official WhatsApp sticker-pack hand-off, targeted at one app. */
+    private fun addToWhatsApp(packageName: String) {
+        val appName = WhatsAppHelper.displayName(packageName)
+        if (!WhatsAppHelper.isInstalled(this, packageName)) {
+            toastLong("$appName is not installed on this phone.")
             return
         }
-        if (pack.stickers.size > 30) {
-            Toast.makeText(
-                this,
-                "WhatsApp allows at most 30 stickers per pack.",
-                Toast.LENGTH_LONG
-            ).show()
+        // Validate everything up front so the user gets a clear reason
+        // here instead of WhatsApp's opaque validation_error.
+        val problem = WhatsAppHelper.validatePack(this, pack)
+        if (problem != null) {
+            toastLong(problem)
             return
         }
-        val intent = Intent("com.whatsapp.intent.action.ENABLE_STICKER_PACK").apply {
-            putExtra("sticker_pack_id", pack.id)
-            putExtra("sticker_pack_authority", StickerContentProvider.AUTHORITY)
-            putExtra("sticker_pack_name", pack.name)
-        }
+        lastTargetPackage = packageName
         try {
-            startActivityForResult(intent, REQUEST_ADD_TO_WHATSAPP)
+            @Suppress("DEPRECATION")
+            startActivityForResult(
+                WhatsAppHelper.buildIntent(pack, packageName),
+                REQUEST_ADD_TO_WHATSAPP
+            )
         } catch (e: ActivityNotFoundException) {
-            Toast.makeText(
-                this,
-                "WhatsApp is not installed on this phone.",
-                Toast.LENGTH_LONG
-            ).show()
+            toastLong("$appName is not installed on this phone.")
         }
     }
 
@@ -104,19 +115,73 @@ class PackActivity : AppCompatActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_ADD_TO_WHATSAPP) {
-            if (resultCode == RESULT_OK) {
-                Toast.makeText(this, "Pack added to WhatsApp!", Toast.LENGTH_SHORT).show()
-            } else if (data != null) {
-                val reason = data.getStringExtra("validation_error")
-                if (!reason.isNullOrEmpty()) {
-                    Toast.makeText(
-                        this, "WhatsApp could not add this pack: $reason",
-                        Toast.LENGTH_LONG
-                    ).show()
+            val message = WhatsAppHelper.resultMessage(resultCode, data, lastTargetPackage)
+            if (message != null) toastLong(message)
+        }
+    }
+
+    // ---------------- Community publishing ----------------
+
+    private fun confirmPublishPack() {
+        if (pack.stickers.isEmpty()) {
+            toastLong("This pack has no stickers to publish yet.")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Publish pack to Community?")
+            .setMessage(
+                "Anyone using SoundStick can see and use these stickers. " +
+                    "All ${pack.stickers.size} sticker(s) in “${pack.name}” will be published."
+            )
+            .setPositiveButton("Publish") { _, _ -> publishPack() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun publishPack() {
+        val snapshot = PackStore.getPack(this, pack.id) ?: pack
+        toastLong("Publishing pack…")
+        executor.execute {
+            var published = 0
+            for (sticker in snapshot.stickers) {
+                if (CommunityApi.publishSticker(this, snapshot, sticker).isSuccess) {
+                    published++
+                }
+            }
+            runOnUiThread {
+                if (published == snapshot.stickers.size) {
+                    toastLong("Pack published to Community! 🌍")
+                } else if (published > 0) {
+                    toastLong("Published $published of ${snapshot.stickers.size} stickers — Community may be partly unavailable.")
+                } else {
+                    toastLong("Community is not available right now")
                 }
             }
         }
     }
+
+    private fun confirmPublishSticker(sticker: StickerItem) {
+        AlertDialog.Builder(this)
+            .setTitle("Publish sticker to Community?")
+            .setMessage("Anyone using SoundStick can see and use this sticker.")
+            .setPositiveButton("Publish") { _, _ ->
+                toastLong("Publishing sticker…")
+                executor.execute {
+                    val result = CommunityApi.publishSticker(this, pack, sticker)
+                    runOnUiThread {
+                        if (result.isSuccess) {
+                            toastLong("Sticker published to Community! 🌍")
+                        } else {
+                            toastLong("Community is not available right now")
+                        }
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ---------------- Share with Sound ----------------
 
     private fun shareWithSound(sticker: StickerItem) {
         Toast.makeText(this, "Making video with sound…", Toast.LENGTH_SHORT).show()
@@ -160,6 +225,8 @@ class PackActivity : AppCompatActivity() {
         }
     }
 
+    // ---------------- Grid ----------------
+
     private inner class StickerAdapter : RecyclerView.Adapter<StickerAdapter.Holder>() {
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
             val itemBinding = ItemStickerBinding.inflate(
@@ -170,19 +237,28 @@ class PackActivity : AppCompatActivity() {
 
         override fun getItemCount(): Int = pack.stickers.size
 
+        override fun onViewRecycled(holder: Holder) {
+            super.onViewRecycled(holder)
+            holder.stopAnimation()
+        }
+
         override fun onBindViewHolder(holder: Holder, position: Int) {
             val sticker = pack.stickers[position]
+            holder.stopAnimation()
+            holder.boundStickerId = sticker.id
             val dir = PackStore.packDir(this@PackActivity, pack.id)
             val imgFile = File(dir, sticker.imageFile)
+            holder.binding.txtAnimated.visibility =
+                if (sticker.animated) View.VISIBLE else View.GONE
             if (imgFile.exists()) {
                 holder.binding.imgSticker.setImageBitmap(
                     BitmapFactory.decodeFile(imgFile.absolutePath)
                 )
             }
+            if (sticker.animated && imgFile.exists()) {
+                startGridAnimation(holder, sticker.id, imgFile)
+            }
             holder.binding.imgSticker.setOnClickListener { view ->
-                view.startAnimation(
-                    AnimationUtils.loadAnimation(this@PackActivity, android.R.anim.fade_in)
-                )
                 // Bounce/pulse the sticker while its sound plays.
                 view.animate().scaleX(1.15f).scaleY(1.15f).setDuration(120).withEndAction {
                     view.animate().scaleX(1f).scaleY(1f).setDuration(180).start()
@@ -198,9 +274,48 @@ class PackActivity : AppCompatActivity() {
                 }
             }
             holder.binding.btnShareSound.setOnClickListener { shareWithSound(sticker) }
+            holder.binding.btnPublishSticker.setOnClickListener { confirmPublishSticker(sticker) }
+        }
+
+        /** Decodes an animated WebP's frames and cycles them in the cell. */
+        private fun startGridAnimation(holder: Holder, stickerId: String, file: File) {
+            executor.execute {
+                val (frames, durationMs) = AnimatedWebPReader.decodeFrames(file)
+                if (frames.size < 2) return@execute
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (holder.boundStickerId != stickerId) return@runOnUiThread
+                    holder.playFrames(frames, durationMs)
+                }
+            }
         }
 
         inner class Holder(val binding: ItemStickerBinding) :
-            RecyclerView.ViewHolder(binding.root)
+            RecyclerView.ViewHolder(binding.root) {
+
+            var boundStickerId: String? = null
+            private val animHandler = Handler(Looper.getMainLooper())
+            private var animRunnable: Runnable? = null
+
+            fun playFrames(frames: List<Bitmap>, durationMs: Int) {
+                stopAnimation()
+                var index = 0
+                binding.imgSticker.setImageBitmap(frames[0])
+                val runnable = object : Runnable {
+                    override fun run() {
+                        index = (index + 1) % frames.size
+                        binding.imgSticker.setImageBitmap(frames[index])
+                        animHandler.postDelayed(this, durationMs.coerceIn(40, 1000).toLong())
+                    }
+                }
+                animRunnable = runnable
+                animHandler.postDelayed(runnable, durationMs.coerceIn(40, 1000).toLong())
+            }
+
+            fun stopAnimation() {
+                animRunnable?.let { animHandler.removeCallbacks(it) }
+                animRunnable = null
+            }
+        }
     }
 }
