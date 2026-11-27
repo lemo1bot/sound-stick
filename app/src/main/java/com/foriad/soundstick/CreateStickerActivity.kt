@@ -8,9 +8,12 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.SurfaceTexture
 import android.graphics.Typeface
 import android.media.MediaMetadataRetriever
+import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Bundle
@@ -20,6 +23,8 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.Surface
+import android.view.TextureView
 import android.view.View
 import android.view.animation.Animation
 import android.view.animation.ScaleAnimation
@@ -73,8 +78,53 @@ class CreateStickerActivity : AppCompatActivity() {
     private val samplingBusy = AtomicBoolean(false)
     private val samplingPending = AtomicBoolean(false)
 
+    // ---- Live player preview (primary video preview) ----
+    // A real MediaPlayer on a TextureView plays the trimmed segment
+    // smoothly; the sampled-frames loop above remains as the fallback if
+    // the player cannot run on this device.
+    private var previewPlayer: MediaPlayer? = null
+    private var previewSurface: Surface? = null
+    private var playerActive = false
+    private var playerPrepared = false
+    private var playerVideoWidth = 0
+    private var playerVideoHeight = 0
+
+    /** Loops the player inside [trimStartMs, trimStartMs + segmentLength]. */
+    private val segmentWatcher = object : Runnable {
+        override fun run() {
+            val player = previewPlayer
+            if (player == null || !playerPrepared) return
+            try {
+                if (player.isPlaying) {
+                    val pos = player.currentPosition.toLong()
+                    val endMs = trimStartMs + segmentLengthMs()
+                    if (pos >= endMs || pos < trimStartMs) {
+                        player.seekTo(trimStartMs.toInt())
+                    }
+                }
+            } catch (e: Exception) {
+                // Player raced with a release; the watcher stops with it.
+                return
+            }
+            handler.postDelayed(this, 50)
+        }
+    }
+
+    /** Debounced seek used while the trim-start slider is being dragged. */
+    private val playerSeek = Runnable {
+        val player = previewPlayer ?: return@Runnable
+        if (playerPrepared) {
+            try {
+                player.seekTo(trimStartMs.toInt())
+            } catch (e: Exception) {
+                // ignore: player is being torn down
+            }
+        }
+    }
+
     private val previewCycle = object : Runnable {
         override fun run() {
+            if (playerActive) return
             if (!videoMode || previewFrames.size < 2) return
             previewIndex = (previewIndex + 1) % previewFrames.size
             binding.imgPreview.setImageBitmap(previewFrames[previewIndex])
@@ -127,6 +177,34 @@ class CreateStickerActivity : AppCompatActivity() {
         binding.btnVideoSound.setOnClickListener { useVideoSound() }
         binding.btnPlaySound.setOnClickListener { playCurrentSound() }
         binding.imgPreview.setOnClickListener { onPreviewTapped() }
+        // The TextureView stacks above imgPreview in video mode, so it
+        // must forward taps to the same handler.
+        binding.texturePreview.setOnClickListener { onPreviewTapped() }
+        binding.texturePreview.surfaceTextureListener =
+            object : TextureView.SurfaceTextureListener {
+                override fun onSurfaceTextureAvailable(
+                    surface: SurfaceTexture, width: Int, height: Int
+                ) {
+                    if (videoMode && videoFile != null) setupPlayer()
+                }
+
+                override fun onSurfaceTextureSizeChanged(
+                    surface: SurfaceTexture, width: Int, height: Int
+                ) {
+                    applyPlayerTransform()
+                }
+
+                override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                    releasePlayer()
+                    if (videoMode) {
+                        binding.texturePreview.visibility = View.GONE
+                        samplePreviewFrames()
+                    }
+                    return true
+                }
+
+                override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+            }
         binding.btnSave.setOnClickListener { choosePackAndSave() }
 
         binding.editCaption.addTextChangedListener(object : TextWatcher {
@@ -146,11 +224,37 @@ class CreateStickerActivity : AppCompatActivity() {
         setupVideoControls()
     }
 
+    override fun onPause() {
+        super.onPause()
+        stopSegmentWatcher()
+        if (playerPrepared) {
+            try {
+                previewPlayer?.pause()
+            } catch (e: Exception) {
+                // ignore: player is being torn down
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (videoMode && playerActive && playerPrepared && previewPlayer != null) {
+            try {
+                previewPlayer?.start()
+                startSegmentWatcher()
+            } catch (e: Exception) {
+                // ignore: player is being torn down
+            }
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         stopPulse()
         handler.removeCallbacks(previewCycle)
         handler.removeCallbacks(previewResample)
+        handler.removeCallbacks(playerSeek)
+        releasePlayer()
         SoundPlayer.stop()
         stopRecording(cancel = true)
         tts?.shutdown()
@@ -224,6 +328,10 @@ class CreateStickerActivity : AppCompatActivity() {
                         (durationMs - 500L).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
                     binding.seekTrimStart.progress = 0
                     updateTrimLabels()
+                    // Primary preview: the live player. The sampled-frames
+                    // loop also starts, as instant stills + fallback if the
+                    // player fails on this device.
+                    setupPlayer()
                     samplePreviewFrames()
                     toast("Video added — trim & crop it, then add a sound!")
                 }
@@ -238,7 +346,135 @@ class CreateStickerActivity : AppCompatActivity() {
         previewGeneration++
         previewFrames = emptyList()
         handler.removeCallbacks(previewCycle)
+        releasePlayer()
+        binding.texturePreview.visibility = View.GONE
         binding.layoutVideoControls.visibility = View.GONE
+    }
+
+    // ---------------- Live player preview ----------------
+
+    /**
+     * Creates (or recreates) the MediaPlayer for the local video file on
+     * the TextureView's surface. Safe to call when no surface exists yet —
+     * the SurfaceTextureListener retries when one becomes available.
+     */
+    private fun setupPlayer() {
+        val video = videoFile ?: return
+        val texture = binding.texturePreview.surfaceTexture ?: return
+        releasePlayer()
+        val surface = Surface(texture)
+        previewSurface = surface
+        val player = MediaPlayer()
+        previewPlayer = player
+        try {
+            player.setDataSource(video.absolutePath)
+            player.setSurface(surface)
+            player.setVolume(0f, 0f)
+            player.setOnPreparedListener { mp ->
+                if (previewPlayer !== mp) return@setOnPreparedListener
+                playerPrepared = true
+                playerVideoWidth = mp.videoWidth
+                playerVideoHeight = mp.videoHeight
+                applyPlayerTransform()
+                // The view may not be laid out yet at prepare time.
+                binding.texturePreview.post { applyPlayerTransform() }
+                try {
+                    mp.seekTo(trimStartMs.toInt())
+                    mp.start()
+                } catch (e: Exception) {
+                    // ignore: player is being torn down
+                }
+                startSegmentWatcher()
+            }
+            player.setOnInfoListener { _, what, _ ->
+                if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                    onPlayerRendering()
+                }
+                false
+            }
+            player.setOnErrorListener { _, _, _ ->
+                onPlayerError()
+                true
+            }
+            player.prepareAsync()
+        } catch (e: Exception) {
+            onPlayerError()
+        }
+    }
+
+    /** First frame is on screen: swap the sampled-frames loop for the player. */
+    private fun onPlayerRendering() {
+        if (!videoMode) return
+        playerActive = true
+        handler.removeCallbacks(previewCycle)
+        binding.texturePreview.visibility = View.VISIBLE
+    }
+
+    /** Player failed: hide it and fall back to the sampled-frames loop. */
+    private fun onPlayerError() {
+        releasePlayer()
+        binding.texturePreview.visibility = View.GONE
+        if (videoMode) samplePreviewFrames()
+    }
+
+    private fun releasePlayer() {
+        stopSegmentWatcher()
+        handler.removeCallbacks(playerSeek)
+        try {
+            previewPlayer?.stop()
+        } catch (e: Exception) {
+            // ignore: not all states allow stop()
+        }
+        previewPlayer?.release()
+        previewPlayer = null
+        previewSurface?.release()
+        previewSurface = null
+        playerActive = false
+        playerPrepared = false
+        playerVideoWidth = 0
+        playerVideoHeight = 0
+    }
+
+    private fun startSegmentWatcher() {
+        handler.removeCallbacks(segmentWatcher)
+        handler.postDelayed(segmentWatcher, 50)
+    }
+
+    private fun stopSegmentWatcher() {
+        handler.removeCallbacks(segmentWatcher)
+    }
+
+    private fun schedulePlayerSeek() {
+        handler.removeCallbacks(playerSeek)
+        handler.postDelayed(playerSeek, 150)
+    }
+
+    /**
+     * Applies the export crop (center-crop + zoom + X/Y pan) to the
+     * TextureView. The TextureView's default transform stretches the
+     * video buffer to fill the view exactly, so we scale about the view
+     * center by the cover factor (relative to that default fit) times the
+     * zoom, then translate by the crop offsets scaled to the overflow —
+     * the same math [processFrame] applies to exported frames.
+     */
+    private fun applyPlayerTransform() {
+        val view = binding.texturePreview
+        val viewW = view.width
+        val viewH = view.height
+        if (viewW == 0 || viewH == 0 || playerVideoWidth == 0 || playerVideoHeight == 0) return
+        val fitX = viewW.toFloat() / playerVideoWidth
+        val fitY = viewH.toFloat() / playerVideoHeight
+        val cover = maxOf(fitX, fitY)
+        val relX = cover / fitX
+        val relY = cover / fitY
+        val contentW = playerVideoWidth * cover
+        val contentH = playerVideoHeight * cover
+        val overflowX = (contentW * zoom - viewW) / 2f
+        val overflowY = (contentH * zoom - viewH) / 2f
+        val matrix = Matrix()
+        matrix.setScale(relX * zoom, relY * zoom, viewW / 2f, viewH / 2f)
+        matrix.postTranslate(-cropX * overflowX, -cropY * overflowY)
+        view.setTransform(matrix)
     }
 
     private fun cropSquare(bmp: Bitmap): Bitmap {
@@ -261,12 +497,21 @@ class CreateStickerActivity : AppCompatActivity() {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 trimStartMs = progress.toLong()
                 updateTrimLabels()
-                schedulePreviewResample()
+                if (playerActive) {
+                    schedulePlayerSeek()
+                } else {
+                    schedulePreviewResample()
+                }
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                samplePreviewFrames()
+                if (playerActive) {
+                    handler.removeCallbacks(playerSeek)
+                    playerSeek.run()
+                } else {
+                    samplePreviewFrames()
+                }
             }
         })
         binding.rgLength.setOnCheckedChangeListener { _, checkedId ->
@@ -276,39 +521,53 @@ class CreateStickerActivity : AppCompatActivity() {
                 else -> 3
             }
             updateTrimLabels()
-            samplePreviewFrames()
+            // With the player active the segment watcher reads the new
+            // length live; only the fallback loop needs fresh frames.
+            if (!playerActive) samplePreviewFrames()
         }
         binding.seekZoom.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 zoom = 1.0f + progress / 100f
-                schedulePreviewResample()
+                if (playerActive) {
+                    applyPlayerTransform()
+                } else {
+                    schedulePreviewResample()
+                }
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                samplePreviewFrames()
+                if (!playerActive) samplePreviewFrames()
             }
         })
         binding.seekCropX.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 cropX = (progress - 100) / 100f
-                schedulePreviewResample()
+                if (playerActive) {
+                    applyPlayerTransform()
+                } else {
+                    schedulePreviewResample()
+                }
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                samplePreviewFrames()
+                if (!playerActive) samplePreviewFrames()
             }
         })
         binding.seekCropY.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 cropY = (progress - 100) / 100f
-                schedulePreviewResample()
+                if (playerActive) {
+                    applyPlayerTransform()
+                } else {
+                    schedulePreviewResample()
+                }
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                samplePreviewFrames()
+                if (!playerActive) samplePreviewFrames()
             }
         })
     }
@@ -369,7 +628,9 @@ class CreateStickerActivity : AppCompatActivity() {
                             previewIndex = 0
                             binding.imgPreview.setImageBitmap(frames[0])
                             handler.removeCallbacks(previewCycle)
-                            if (frames.size > 1) handler.postDelayed(previewCycle, 120)
+                            if (frames.size > 1 && !playerActive) {
+                                handler.postDelayed(previewCycle, 120)
+                            }
                         }
                     }
                 } finally {
@@ -724,7 +985,7 @@ class CreateStickerActivity : AppCompatActivity() {
             return
         }
         if (videoMode) {
-            if (previewFrames.size > 1) {
+            if (!playerActive && previewFrames.size > 1) {
                 handler.removeCallbacks(previewCycle)
                 handler.postDelayed(previewCycle, 120)
             }
