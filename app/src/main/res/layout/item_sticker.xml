@@ -1,24 +1,62 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_margin="5dp"
     android:background="@color/surface_card"
-    android:orientation="vertical"
     android:padding="6dp">
 
+    <!-- Fixed 1:1 cell: the sticker can never overflow its grid cell -->
     <ImageView
         android:id="@+id/imgSticker"
-        android:layout_width="match_parent"
-        android:layout_height="100dp"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
         android:contentDescription="Sticker"
-        android:scaleType="fitCenter" />
+        android:scaleType="centerCrop"
+        app:layout_constraintDimensionRatio="1:1"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
 
-    <Button
-        android:id="@+id/btnShareSound"
-        style="@style/Widget.Material3.Button.TextButton"
-        android:layout_width="match_parent"
+    <TextView
+        android:id="@+id/txtAnimated"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Share with Sound"
-        android:textSize="11sp" />
-</LinearLayout>
+        android:layout_margin="4dp"
+        android:background="@color/yellow"
+        android:paddingStart="5dp"
+        android:paddingEnd="5dp"
+        android:text="ANIMATED"
+        android:textColor="@color/black"
+        android:textSize="9sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="@+id/imgSticker"
+        app:layout_constraintTop_toTopOf="@+id/imgSticker" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/imgSticker">
+
+        <Button
+            android:id="@+id/btnShareSound"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Share with Sound"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btnPublishSticker"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Publish to Community"
+            android:textSize="11sp" />
+    </LinearLayout>
+</androidx.constraintlayout.widget.ConstraintLayout>
