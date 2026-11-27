@@ -18,7 +18,7 @@
             android:layout_width="56dp"
             android:layout_height="56dp"
             android:contentDescription="SoundStick logo"
-            android:src="@drawable/logo_header" />
+            android:src="@drawable/ic_launcher_logo" />
 
         <LinearLayout
             android:layout_width="wrap_content"
@@ -53,6 +53,15 @@
         android:text="＋ Create Sound Sticker"
         android:textSize="17sp"
         android:textStyle="bold" />
+
+    <Button
+        android:id="@+id/btnCommunity"
+        style="@style/Widget.Material3.Button.OutlinedButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="🌍 Community Stickers"
+        android:textSize="15sp" />
 
     <Button
         android:id="@+id/btnFollowX"
