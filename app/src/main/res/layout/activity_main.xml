@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:ads="http://schemas.android.com/apk/res-auto"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/black"
+    android:background="@color/background"
     android:orientation="vertical"
     android:padding="16dp">
 
@@ -30,7 +31,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="SoundStick"
-                android:textColor="@color/yellow"
+                android:textColor="@color/primary"
                 android:textSize="24sp"
                 android:textStyle="bold" />
 
@@ -38,7 +39,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="WhatsApp Sound Stickers"
-                android:textColor="@color/grey_text"
+                android:textColor="@color/text_secondary"
                 android:textSize="13sp" />
         </LinearLayout>
     </LinearLayout>
@@ -51,8 +52,11 @@
         android:layout_marginTop="20dp"
         android:padding="10dp"
         android:text="＋ Create Sound Sticker"
+        android:textColor="@color/on_primary"
         android:textSize="17sp"
-        android:textStyle="bold" />
+        android:textStyle="bold"
+        app:backgroundTint="@color/primary"
+        app:cornerRadius="14dp" />
 
     <Button
         android:id="@+id/btnCommunity"
@@ -61,7 +65,12 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
         android:text="🌍 Community Stickers"
-        android:textSize="15sp" />
+        android:textColor="@color/text_primary"
+        android:textSize="15sp"
+        app:backgroundTint="@color/surface_variant"
+        app:cornerRadius="14dp"
+        app:strokeColor="@color/outline"
+        app:strokeWidth="1dp" />
 
     <Button
         android:id="@+id/btnFollowX"
@@ -69,15 +78,22 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
-        android:text="Follow on X — @Bank_of_eth" />
+        android:text="Follow on X — @Bank_of_eth"
+        android:textColor="@color/text_primary"
+        app:backgroundTint="@color/surface_variant"
+        app:cornerRadius="14dp"
+        app:strokeColor="@color/outline"
+        app:strokeWidth="1dp" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="20dp"
+        android:letterSpacing="0.08"
         android:text="My Packs"
-        android:textColor="@color/white"
-        android:textSize="18sp"
+        android:textAllCaps="true"
+        android:textColor="@color/primary"
+        android:textSize="12sp"
         android:textStyle="bold" />
 
     <TextView
@@ -86,7 +102,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="12dp"
         android:text="No packs yet. Create your first sound sticker!"
-        android:textColor="@color/grey_text"
+        android:textColor="@color/text_secondary"
         android:textSize="14sp" />
 
     <androidx.recyclerview.widget.RecyclerView
