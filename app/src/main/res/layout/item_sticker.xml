@@ -3,9 +3,9 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_margin="5dp"
-    android:background="@color/surface_card"
-    android:padding="6dp">
+    android:layout_margin="6dp"
+    android:background="@drawable/bg_card"
+    android:padding="12dp">
 
     <!-- Fixed 1:1 cell: the sticker can never overflow its grid cell -->
     <ImageView
@@ -24,11 +24,11 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_margin="4dp"
-        android:background="@color/yellow"
+        android:background="@color/primary"
         android:paddingStart="5dp"
         android:paddingEnd="5dp"
         android:text="ANIMATED"
-        android:textColor="@color/black"
+        android:textColor="@color/on_primary"
         android:textSize="9sp"
         android:textStyle="bold"
         android:visibility="gone"
@@ -49,7 +49,9 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Share with Sound"
-            android:textSize="11sp" />
+            android:textColor="@color/primary"
+            android:textSize="11sp"
+            android:textStyle="bold" />
 
         <Button
             android:id="@+id/btnPublishSticker"
@@ -57,6 +59,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Publish to Community"
-            android:textSize="11sp" />
+            android:textColor="@color/primary"
+            android:textSize="11sp"
+            android:textStyle="bold" />
     </LinearLayout>
 </androidx.constraintlayout.widget.ConstraintLayout>
