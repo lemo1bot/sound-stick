@@ -6,21 +6,25 @@ SoundStick ("the app") is a sticker maker for Android. This policy explains what
 
 ## Data the app collects
 
-**None on our servers.** SoundStick has no account system and no backend server. We do not collect, upload, or sell your personal data.
+**None on our servers.** SoundStick has no account system. We do not collect, sell, or track your personal data. The single exception is the Community feature described below, which only uploads stickers you explicitly choose to publish.
 
 ## Data stored on your device
 
-The stickers you create (images and sounds), your voice recordings, and your sticker packs are stored only in the app's private storage on your phone. They are never sent anywhere by the app. If you delete the app, this data is deleted with it.
+The stickers you create (images and sounds), your voice recordings, and your sticker packs are stored only in the app's private storage on your phone. They are never sent anywhere by the app unless you publish them to Community (below). If you delete the app, this data is deleted with it.
+
+## Community (optional)
+
+If you tap "Publish to Community" on a sticker or a pack, that sticker's image and sound are uploaded to our community storage (hosted on Supabase) together with the pack name and the publisher name "SoundStick user", so other SoundStick users can see and use it. Published stickers are public within the app. Nothing is uploaded unless you tap Publish and confirm.
 
 ## Permissions
 
 - **Microphone** — only used when you tap "Record Voice", to record the sound for your sticker. Recordings stay on your device.
 - **Photos / Videos / Audio access** — only used to let you pick the photo, video, or audio file you choose for a sticker.
-- **Internet** — used only to load ads.
+- **Internet** — used to load ads and, if you use it, the Community feed (loading published stickers and uploading stickers you choose to publish).
 
 ## Sharing
 
-When you use "Add to WhatsApp" or "Share with Sound", the sticker content is passed to the app you choose (for example WhatsApp). That app's own privacy policy applies from that point.
+When you use "Add to WhatsApp", "Add to WhatsApp Business", or "Share with Sound", the sticker content is passed to the app you choose (for example WhatsApp). That app's own privacy policy applies from that point.
 
 ## Advertising
 
