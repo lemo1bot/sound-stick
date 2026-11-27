@@ -46,7 +46,7 @@ class CreateStickerActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
 
     private var baseBitmap: Bitmap? = null
-    private var videoUri: Uri? = null
+    private var videoFile: File? = null
     private var soundFile: File? = null
 
     // ---- Video (animated sticker) mode state ----
@@ -162,7 +162,7 @@ class CreateStickerActivity : AppCompatActivity() {
                     return@execute
                 }
                 baseBitmap = cropSquare(bmp)
-                videoUri = null
+                videoFile = null
                 runOnUiThread {
                     exitVideoMode()
                     binding.btnVideoSound.visibility = View.GONE
@@ -176,10 +176,21 @@ class CreateStickerActivity : AppCompatActivity() {
     }
 
     private fun loadVideo(uri: Uri) {
+        // A long video can be hundreds of MB behind a content:// Uri, and
+        // frame extraction from such Uris is unreliable (frames come back
+        // null, so the preview never appears). Copy it to a local file
+        // first and do ALL video work from the file path.
+        toast("Loading video…")
         executor.execute {
             try {
+                val ext = AudioTools.videoExtensionFor(this@CreateStickerActivity, uri)
+                val local = File(cacheDir, "picked_video.$ext")
+                if (!AudioTools.copyUriToFile(this@CreateStickerActivity, uri, local)) {
+                    runOnUiThread { toast("Could not load that video") }
+                    return@execute
+                }
                 val retriever = MediaMetadataRetriever()
-                retriever.setDataSource(this@CreateStickerActivity, uri)
+                retriever.setDataSource(local.absolutePath)
                 val durationMs = retriever.extractMetadata(
                     MediaMetadataRetriever.METADATA_KEY_DURATION
                 )?.toLongOrNull() ?: 0L
@@ -190,7 +201,7 @@ class CreateStickerActivity : AppCompatActivity() {
                 }
                 runOnUiThread {
                     videoMode = true
-                    videoUri = uri
+                    videoFile = local
                     baseBitmap = null
                     videoDurationMs = durationMs
                     trimStartMs = 0L
@@ -295,13 +306,24 @@ class CreateStickerActivity : AppCompatActivity() {
 
     /** Samples low-res frames of the chosen segment and loops them as a preview. */
     private fun samplePreviewFrames() {
-        val uri = videoUri ?: return
+        val video = videoFile ?: return
         val generation = ++previewGeneration
         val caption = binding.editCaption.text?.toString()?.trim().orEmpty()
         val start = trimStartMs
         val length = segmentLengthMs()
         executor.execute {
-            val frames = sampleFrames(uri, start, length, fps = 6, size = 256, caption = caption)
+            // Fast path: show ONE frame at the segment start right away so
+            // the preview never sits on the placeholder while the full
+            // looping set is being sampled.
+            val firstFrame = sampleSingleFrame(video, start, caption)
+            if (firstFrame != null) {
+                runOnUiThread {
+                    if (generation == previewGeneration && videoMode) {
+                        binding.imgPreview.setImageBitmap(firstFrame)
+                    }
+                }
+            }
+            val frames = sampleFrames(video, start, length, fps = 6, size = 256, caption = caption)
             runOnUiThread {
                 if (generation != previewGeneration || !videoMode) return@runOnUiThread
                 if (frames.isEmpty()) {
@@ -317,12 +339,54 @@ class CreateStickerActivity : AppCompatActivity() {
         }
     }
 
+    /** Extracts and processes a single frame at [timeMs] from the local file. */
+    private fun sampleSingleFrame(video: File, timeMs: Long, caption: String): Bitmap? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(video.absolutePath)
+            val frame = getFrameWithFallback(retriever, timeMs * 1000L) ?: return null
+            processFrame(frame, 256, caption)
+        } catch (e: Exception) {
+            null
+        } finally {
+            try {
+                retriever.release()
+            } catch (e: Exception) {
+                // ignore
+            }
+        }
+    }
+
+    /**
+     * Frame getter with a fallback chain: some devices/codecs return null
+     * for OPTION_CLOSEST on timestamps they cannot seek to exactly, so fall
+     * back to the sync-frame options before giving up on the timestamp.
+     */
+    private fun getFrameWithFallback(
+        retriever: MediaMetadataRetriever,
+        timeUs: Long
+    ): Bitmap? {
+        val options = intArrayOf(
+            MediaMetadataRetriever.OPTION_CLOSEST,
+            MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+            MediaMetadataRetriever.OPTION_PREVIOUS_SYNC
+        )
+        for (option in options) {
+            try {
+                retriever.getFrameAtTime(timeUs, option)?.let { return it }
+            } catch (e: Exception) {
+                // try the next option
+            }
+        }
+        return null
+    }
+
     /**
      * Samples [fps] frames per second from the video segment, applying the
      * square crop (zoom + X/Y offset) and the caption to every frame.
      */
     private fun sampleFrames(
-        uri: Uri,
+        video: File,
         startMs: Long,
         lengthMs: Int,
         fps: Int,
@@ -331,7 +395,7 @@ class CreateStickerActivity : AppCompatActivity() {
     ): List<Bitmap> {
         val retriever = MediaMetadataRetriever()
         try {
-            retriever.setDataSource(this, uri)
+            retriever.setDataSource(video.absolutePath)
         } catch (e: Exception) {
             return emptyList()
         }
@@ -341,14 +405,7 @@ class CreateStickerActivity : AppCompatActivity() {
         try {
             for (i in 0 until count) {
                 val tMs = startMs + i * (1000 / fps)
-                val frame = try {
-                    retriever.getFrameAtTime(
-                        tMs * 1000L,
-                        MediaMetadataRetriever.OPTION_CLOSEST
-                    )
-                } catch (e: Exception) {
-                    null
-                }
+                val frame = getFrameWithFallback(retriever, tMs * 1000L)
                 val src = frame ?: last ?: continue
                 last = src
                 out.add(processFrame(src, size, caption))
@@ -433,11 +490,11 @@ class CreateStickerActivity : AppCompatActivity() {
     }
 
     private fun useVideoSound() {
-        val uri = videoUri ?: return
+        val video = videoFile ?: return
         toast("Extracting the video's sound…")
         executor.execute {
             val out = File(cacheDir, "video_sound.m4a")
-            val ok = AudioTools.extractVideoAudio(this@CreateStickerActivity, uri, out)
+            val ok = AudioTools.extractVideoAudio(video, out)
             runOnUiThread {
                 if (ok) setSound(out, "video's own sound")
                 else toast("That video has no sound track")
@@ -629,7 +686,7 @@ class CreateStickerActivity : AppCompatActivity() {
 
     private fun choosePackAndSave() {
         val animated = videoMode
-        if (animated && videoUri == null) {
+        if (animated && videoFile == null) {
             toast("Pick a video first")
             return
         }
@@ -682,13 +739,13 @@ class CreateStickerActivity : AppCompatActivity() {
             }
             return
         }
-        val uri = videoUri ?: return
+        val video = videoFile ?: return
         val caption = binding.editCaption.text?.toString()?.trim().orEmpty()
         val start = trimStartMs
         val fullLength = segmentLengthMs()
         toast("Making your animated sticker…")
         executor.execute {
-            val encoded = encodeAnimatedSticker(uri, start, fullLength, caption)
+            val encoded = encodeAnimatedSticker(video, start, fullLength, caption)
             if (encoded == null) {
                 runOnUiThread { toast("Could not make an animated sticker from that video") }
                 return@execute
@@ -707,7 +764,7 @@ class CreateStickerActivity : AppCompatActivity() {
      * then a shorter segment, until it fits WhatsApp's limit.
      */
     private fun encodeAnimatedSticker(
-        uri: Uri,
+        video: File,
         startMs: Long,
         fullLengthMs: Int,
         caption: String
@@ -725,7 +782,7 @@ class CreateStickerActivity : AppCompatActivity() {
         )
         for (attempt in attempts) {
             val lengthMs = (fullLengthMs * attempt.lengthScale).toInt().coerceAtLeast(200)
-            val frames = sampleFrames(uri, startMs, lengthMs, attempt.fps, 512, caption)
+            val frames = sampleFrames(video, startMs, lengthMs, attempt.fps, 512, caption)
             if (frames.isEmpty()) continue
             val bytes = AnimatedWebPWriter.encode(frames, 1000 / attempt.fps, attempt.quality)
                 ?: continue
